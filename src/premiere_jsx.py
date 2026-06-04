@@ -56,14 +56,15 @@ def generate_premiere_setup_script(
         "preset": proxy_preset,
         "encode_preset": encode_preset,
         "proxy_sub": proxy_sub,
-        "auto_proxies": "true" if do_proxies else "false",
+        "auto_proxies_bool": "true" if do_proxies else "false",
     }
-    lit = {k: json.dumps(v) for k, v in literals.items()}
+    lit = {k: json.dumps(v) for k, v in literals.items() if k != "auto_proxies_bool"}
 
     return f"""// Auto-generated — Nathan Doan Productions
 // Proxy target: Quarter, ProRes QuickTime Proxy, Proxy Icon, Video/{proxy_sub}/
 
 (function () {{
+    try {{
     var PROJECT_PATH = {lit["prproj"]};
     var VIDEO_DIR = {lit["video"]};
     var PROXIES_DIR = {lit["proxies"]};
@@ -73,14 +74,24 @@ def generate_premiere_setup_script(
     var PROXY_PRESET_PATH = {lit["preset"]};
     var ENCODE_PRESET_PATH = {lit["encode_preset"]};
     var PROXY_SUBFOLDER = {lit["proxy_sub"]};
-    var AUTO_CREATE_PROXIES = {lit["auto_proxies"]} === "true";
+    var AUTO_CREATE_PROXIES = {literals["auto_proxies_bool"]};
 
-    var FOOTAGE_EXT = /\\.(mp4|mov|mxf|avi|mkv|r3d|braw|m4v)$/i;
     var proxyJobs = {{}};
     var batchStarted = false;
 
     function alertMsg(msg) {{
         try {{ alert(msg); }} catch (e) {{ $.writeln(msg); }}
+    }}
+
+    function isFootageFile(name) {{
+        var dot = name.lastIndexOf(".");
+        if (dot < 0) return false;
+        var ext = name.substring(dot + 1).toLowerCase();
+        var allowed = ["mp4", "mov", "mxf", "avi", "mkv", "r3d", "braw", "m4v"];
+        for (var a = 0; a < allowed.length; a++) {{
+            if (ext === allowed[a]) return true;
+        }}
+        return false;
     }}
 
     function pathSep() {{
@@ -108,7 +119,7 @@ def generate_premiere_setup_script(
         for (var i = 0; i < items.length; i++) {{
             if (items[i] instanceof Folder) {{
                 collectMediaFiles(items[i], list);
-            }} else if (items[i] instanceof File && FOOTAGE_EXT.test(items[i].name)) {{
+            }} else if (items[i] instanceof File && isFootageFile(items[i].name)) {{
                 list.push(items[i].fsName);
             }}
         }}
@@ -368,6 +379,9 @@ def generate_premiere_setup_script(
         "When proxies finish:\\n" +
         "python main.py upload-drive --number " + (SCRIPT_NUMBER || "XXX")
     );
+    }} catch (err) {{
+        alertMsg("automate_premiere.jsx failed:\\n" + err.toString());
+    }}
 }})();
 """
 
