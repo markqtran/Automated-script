@@ -6,7 +6,8 @@ Usage:
   python main.py new-project --number 003  # Create folders from [01] Scripts
   python main.py list-scripts             # Show all script numbers/titles
   python main.py workflow --number 003       # Full pipeline: folders + ingest + Premiere script
-  python main.py watch-upload --number 003 # Wait for proxies, upload to Drive
+  python main.py watch-upload --number 003 # Proxies done → HDD backup → Drive
+  python main.py backup-proxies --number 003  # Copy Video/Proxies SSD → HDD only
   python main.py ingest             # Ingest without compare report
   python main.py proxies --folder   # Create FFmpeg proxies
   python main.py upload-drive       # Upload proxies + project to Google Drive
@@ -33,6 +34,7 @@ from src.proxies import create_proxies
 from src.project_paths import project_root
 from src.scripts import resolve_project_folder
 from src.sd_compare import compare_sd_cards_from_config, print_compare_report
+from src.proxy_backup import backup_proxies_to_hdd
 from src.watch_upload import watch_and_upload
 from src.workflow import run_full_workflow
 
@@ -192,7 +194,7 @@ def cmd_watch_upload(
     timeout: int,
     dry_run: bool,
 ) -> None:
-    """Wait until Video/Proxies is done, then upload Proxies + .prproj to Google Drive."""
+    """Wait for proxies, back up SSD→HDD, then upload Proxies + .prproj to Drive."""
     watch_and_upload(
         ctx.obj["cfg"],
         number,
@@ -302,6 +304,17 @@ def proxies(ctx: click.Context, folder: str, dry_run: bool) -> None:
     create_proxies(folder, ctx.obj["cfg"], dry_run=dry_run)
 
 
+@cli.command("backup-proxies")
+@click.option("--number", "-n", required=True, help="3-digit script number")
+@click.option("--dry-run", is_flag=True)
+@click.pass_context
+def cmd_backup_proxies(ctx: click.Context, number: str, dry_run: bool) -> None:
+    """Copy Video/Proxies from SSD (Soju) to matching folder on hdd_backup."""
+    cfg = ctx.obj["cfg"]
+    folder_name = resolve_project_folder(cfg, number)
+    backup_proxies_to_hdd(cfg, folder_name, dry_run=dry_run)
+
+
 @cli.command("upload-drive")
 @click.option("--folder", "-f", default=None, help="Project folder on SSD, e.g. F:\\[003] Title")
 @click.option("--number", "-n", default=None, help="3-digit script number (finds project folder)")
@@ -315,14 +328,18 @@ def cmd_upload_drive(
     project: str | None,
     dry_run: bool,
 ) -> None:
-    """Upload Video/Proxies folder and .prproj to Google Drive (not original footage)."""
+    """Back up proxies to HDD, then upload Proxies + .prproj to Google Drive."""
     cfg = ctx.obj["cfg"]
+    folder_name: str | None = None
     if number:
-        name = resolve_project_folder(cfg, number)
-        folder = str(project_root(cfg, name)[0])
+        folder_name = resolve_project_folder(cfg, number)
+        folder = str(project_root(cfg, folder_name)[0])
         console.print(f"[bold]Project folder:[/bold] {folder}")
     if not folder:
         raise click.UsageError("Provide --folder or --number")
+    if folder_name is None:
+        folder_name = Path(folder).name
+    backup_proxies_to_hdd(cfg, folder_name, dry_run=dry_run)
     upload_to_drive(folder, cfg, project_file=project, dry_run=dry_run)
 
 

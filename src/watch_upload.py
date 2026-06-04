@@ -9,6 +9,7 @@ from rich.console import Console
 
 from .gdrive import upload_to_drive
 from .project_paths import find_prproj, proxies_dir, project_root
+from .proxy_backup import backup_proxies_to_hdd
 from .scripts import resolve_project_folder
 
 console = Console()
@@ -52,7 +53,7 @@ def watch_and_upload(
     dry_run: bool = False,
 ) -> dict:
     """
-    Poll Video/Proxies until files stop changing, then upload Proxies + .prproj.
+    Poll Video/Proxies until stable, copy proxies SSD → HDD, then upload to Drive.
     """
     folder_name = resolve_project_folder(cfg, number)
     ssd_path, _ = project_root(cfg, folder_name)
@@ -78,8 +79,13 @@ def watch_and_upload(
         console.print("[red]Timed out waiting for proxies.[/red]")
         return {"success": False, "reason": "timeout"}
 
-    if dry_run:
-        console.print("[yellow]Dry run — would upload now.[/yellow]")
-        return {"success": True, "dry_run": True}
+    backup_stats = backup_proxies_to_hdd(cfg, folder_name, dry_run=dry_run)
 
-    return upload_to_drive(ssd_path, cfg, project_file=find_prproj(cfg, ssd_path), dry_run=False)
+    if dry_run:
+        console.print("[yellow]Dry run — would upload to Drive next.[/yellow]")
+        return {"success": True, "dry_run": True, "backup": backup_stats}
+
+    upload_stats = upload_to_drive(
+        ssd_path, cfg, project_file=find_prproj(cfg, ssd_path), dry_run=False
+    )
+    return {"success": True, "backup": backup_stats, "upload": upload_stats}

@@ -31,7 +31,7 @@ def run_full_workflow(
     2. Create Video/ on SSD + HDD
     3. Copy SD card (PRIVATE/M4ROOT/CLIP...) into Video/
     4. Write automate_premiere.jsx + open Premiere
-    5. Optionally wait for Proxies and upload to Drive
+    5. Optionally wait for proxies, back up SSD→HDD, upload to Drive
     """
     entry = get_script_by_number(cfg, number, refresh=refresh)
     folder_name = entry.folder_name
@@ -85,5 +85,7 @@ def run_full_workflow(
     if watch_upload:
         watch_and_upload(cfg, number, dry_run=dry_run)
     else:
-        console.print(f"\n[bold]When proxies finish:[/bold] python main.py upload-drive --number {number}")
-        console.print(f"  Or: python main.py watch-upload --number {number}")
+        console.print(f"\n[bold]When proxies finish:[/bold]")
+        console.print(f"  python main.py watch-upload --number {number}  (HDD backup + Drive)")
+        console.print(f"  Or: python main.py backup-proxies --number {number}")
+        console.print(f"       python main.py upload-drive --number {number}")

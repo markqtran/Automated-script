@@ -150,7 +150,9 @@ def setup_new_project(
         console.print(f"  python main.py new-project --number {entry.number} --open-premiere")
         console.print(f"  Or close Premiere and run with --open-premiere to auto-create the project on the SSD")
         console.print(f"  4. After filming: python main.py daily --number {entry.number}")
-        console.print(f"  5. After proxies finish: python main.py upload-drive --number {entry.number}")
+        console.print(
+            f"  5. After proxies: python main.py watch-upload --number {entry.number}"
+        )
 
     return {
         "number": entry.number,
