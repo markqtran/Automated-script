@@ -5,6 +5,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -14,6 +15,15 @@ from rich.console import Console
 console = Console()
 
 EXTENDSCRIPT_FLAG = "extendscriptprqe.txt"
+HELPER_SCRIPT_NAME = "Run Automated Workflow.jsx"
+HELPER_SOURCE = Path(__file__).resolve().parent.parent / "templates" / "premiere_run_queued.jsx"
+
+
+def automated_script_state_dir() -> Path:
+    """LocalAppData — matches ExtendScript Folder.appData on Windows."""
+    state = Path(os.environ.get("LOCALAPPDATA", tempfile.gettempdir())) / "Automated-script"
+    state.mkdir(parents=True, exist_ok=True)
+    return state
 
 
 def find_premiere_exe(cfg: dict) -> Path | None:
@@ -32,6 +42,23 @@ def find_premiere_exe(cfg: dict) -> Path | None:
     if not matches:
         return None
     return Path(sorted(matches)[-1])
+
+
+def find_premiere_scripts_folder() -> Path | None:
+    """Documents/Adobe/Premiere Pro/<version>/Scripts (newest version first)."""
+    root = Path.home() / "Documents" / "Adobe" / "Premiere Pro"
+    if not root.is_dir():
+        return None
+    version_dirs = sorted(
+        (p for p in root.iterdir() if p.is_dir()),
+        key=lambda p: p.name,
+        reverse=True,
+    )
+    for version_dir in version_dirs:
+        scripts = version_dir / "Scripts"
+        scripts.mkdir(parents=True, exist_ok=True)
+        return scripts
+    return None
 
 
 def is_media_encoder_running() -> bool:
@@ -108,6 +135,39 @@ def ensure_extendscript_flag(premiere_exe: Path) -> tuple[bool, Path]:
         return False, flag
 
 
+def ensure_premiere_scripts_helper() -> Path | None:
+    """
+    Copy queue runner into Premiere's Scripts folder (File → Scripts menu).
+    Used when Premiere is already open — CLI /C cannot target a live session.
+    """
+    if not HELPER_SOURCE.is_file():
+        console.print(f"[yellow]Missing helper template:[/yellow] {HELPER_SOURCE}")
+        return None
+
+    scripts_dir = find_premiere_scripts_folder()
+    if not scripts_dir:
+        console.print(
+            "[yellow]Premiere Scripts folder not found.[/yellow] "
+            "Open Premiere once so Documents/Adobe/Premiere Pro/... is created."
+        )
+        return None
+
+    dest = scripts_dir / HELPER_SCRIPT_NAME
+    try:
+        shutil.copy2(HELPER_SOURCE, dest)
+    except OSError as exc:
+        console.print(f"[yellow]Could not install Scripts helper:[/yellow] {exc}")
+        return None
+    return dest
+
+
+def write_script_queue(jsx_path: Path) -> Path:
+    """Queue automate_premiere.jsx for the Scripts-menu runner (Premiere already open)."""
+    queue = automated_script_state_dir() / "queue.txt"
+    queue.write_text(_jsx_path_for_extendscript(jsx_path) + "\n", encoding="utf-8")
+    return queue
+
+
 def install_premiere_cli_scripting(cfg: dict) -> bool:
     """One-time setup so Premiere runs JSX on launch (may need Administrator)."""
     premiere = find_premiere_exe(cfg)
@@ -128,11 +188,17 @@ def install_premiere_cli_scripting(cfg: dict) -> bool:
         ok = _try_elevated_create_flag(flag)
         if ok:
             console.print(f"[green]Created[/green] {flag}")
+
+    helper = ensure_premiere_scripts_helper()
+    if helper:
+        console.print(f"[green]Scripts helper installed:[/green] {helper.name}")
+
     if ok:
         console.print(
-            "\n[green]Premiere CLI scripting is enabled.[/green]\n"
-            "  Run: python main.py workflow --number 003\n"
-            "  (Premiere may already be open — script will run in the current session.)"
+            "\n[green]Premiere automation is ready.[/green]\n"
+            "  Cold start: python main.py workflow --number 003\n"
+            "  Premiere already open: workflow queues the script — then in Premiere:\n"
+            f"    File → Scripts → {HELPER_SCRIPT_NAME}\n"
         )
         return True
 
@@ -145,10 +211,10 @@ def install_premiere_cli_scripting(cfg: dict) -> bool:
         "  2. File → Save As → paste this path in the filename box:\n"
         f"     {flag}\n"
         "  3. Save empty file (choose All Files if needed)\n\n"
-        "  [bold]Option C — Skip CLI[/bold] (no admin): In Premiere after workflow:\n"
-        "  File → Scripts → Run Script File → automate_premiere.jsx\n"
+        "  [bold]Option C — Scripts menu[/bold] (no admin): After workflow with Premiere open:\n"
+        f"  File → Scripts → {HELPER_SCRIPT_NAME}\n"
     )
-    return False
+    return helper is not None
 
 
 def _jsx_path_for_extendscript(path: Path) -> str:
@@ -156,8 +222,8 @@ def _jsx_path_for_extendscript(path: Path) -> str:
     return path.resolve().as_posix()
 
 
-def _write_temp_wrapper(jsx_path: Path) -> Path:
-    """Wrapper in %TEMP% avoids cmd-line issues with [brackets] in project folder names."""
+def _write_launch_wrapper(jsx_path: Path) -> Path:
+    """Stable wrapper path (no [brackets]) for Premiere CLI es.processFile."""
     target_lit = json.dumps(_jsx_path_for_extendscript(jsx_path))
     content = f"""(function () {{
     var f = new File({target_lit});
@@ -168,9 +234,14 @@ def _write_temp_wrapper(jsx_path: Path) -> Path:
     $.evalFile(f);
 }})();
 """
-    wrapper = Path(tempfile.gettempdir()) / "automated_script_premiere_run.jsx"
+    wrapper = automated_script_state_dir() / "premiere_cli_wrapper.jsx"
     wrapper.write_text(content, encoding="utf-8")
     return wrapper
+
+
+def _extendscript_cli_command(script_path: Path) -> str:
+    """Single /C argument Adobe expects: es.processFile("C:/path/script.jsx")."""
+    return f'es.processFile("{_jsx_path_for_extendscript(script_path)}")'
 
 
 def write_launch_batch(
@@ -181,11 +252,15 @@ def write_launch_batch(
     """Batch file Ethan can double-click if Python launch does not run the script."""
     bat = project_folder / "OPEN_PREMIERE_AUTOMATION.bat"
     prem = str(premiere_exe.resolve())
-    jsx = str(jsx_path.resolve())
+    wrapper = _write_launch_wrapper(jsx_path)
+    cli = _extendscript_cli_command(wrapper)
     bat.write_text(
         "@echo off\n"
         "echo Starting Premiere with automation...\n"
-        f'start "" "{prem}" /C es.processFile "{jsx}"\n'
+        f'start "" "{prem}" /C {cli}\n'
+        "echo.\n"
+        "echo If Premiere was already open, use instead:\n"
+        f"echo   File - Scripts - {HELPER_SCRIPT_NAME}\n"
         "echo.\n"
         "echo If nothing happens, run once as Administrator:\n"
         "echo   python main.py install-premiere\n"
@@ -196,17 +271,38 @@ def write_launch_batch(
 
 
 def _try_launch(premiere: Path, script_path: Path, cwd: Path) -> bool:
-    script = str(script_path.resolve())
-    for args in (
-        [str(premiere), "/C", "es.processFile", script],
-        [str(premiere), "/C", "es.process", f'$.evalFile(new File("{_jsx_path_for_extendscript(script_path)}"));'],
-    ):
+    """Launch Premiere cold and run ExtendScript (Premiere must not already be open)."""
+    command = _extendscript_cli_command(script_path)
+    attempts = (
+        [str(premiere), "/C", command],
+        [str(premiere), f"/C {command}"],
+    )
+    for args in attempts:
         try:
             subprocess.Popen(args, shell=False, cwd=str(cwd))
             return True
         except OSError:
             continue
     return False
+
+
+def _queue_for_open_premiere(jsx_path: Path) -> bool:
+    """Premiere is live — queue script and use File → Scripts (CLI cannot attach)."""
+    write_script_queue(jsx_path)
+    helper = ensure_premiere_scripts_helper()
+    console.print(
+        "\n[bold yellow]Premiere is already open[/bold yellow] — one quick step in Premiere:\n"
+        f"  [bold]File → Scripts → {HELPER_SCRIPT_NAME}[/bold]\n"
+        "  (Adobe cannot run CLI scripts into an open session — this avoids the "
+        "'file path does not exist' error.)\n"
+    )
+    if helper:
+        console.print(f"  Helper: {helper}\n")
+    else:
+        console.print(
+            f"  Or: File → Scripts → Run Script File → {jsx_path.name}\n"
+        )
+    return True
 
 
 def launch_premiere_automation(
@@ -217,10 +313,10 @@ def launch_premiere_automation(
     project_folder: Path,
 ) -> bool:
     """
-    Run automate_premiere.jsx via Premiere CLI (es.processFile).
+    Run automate_premiere.jsx.
 
-    Works with Premiere already open — sends the script to the running session.
-    Media Encoder may also stay open; proxy jobs queue into the existing app.
+    - Premiere closed: launch with /C es.processFile (automatic).
+    - Premiere open: queue script + run File → Scripts → Run Automated Workflow.
     """
     premiere_cfg = cfg.get("premiere", {})
     if premiere_cfg.get("auto_run_script") is False:
@@ -250,39 +346,30 @@ def launch_premiere_automation(
             "(PowerShell as Administrator if it fails).\n"
         )
 
-    wrapper = _write_temp_wrapper(jsx_path)
+    wrapper = _write_launch_wrapper(jsx_path)
     bat_path = write_launch_batch(project_folder, premiere, jsx_path)
-
-    if premiere_open:
-        console.print(
-            "\n[bold]Premiere is already open[/bold] — running automation in current session..."
-        )
-    else:
-        console.print("\n[bold]Launching Premiere with automation...[/bold]")
-
-    if ame_open:
-        console.print("[dim]Media Encoder is open — proxy jobs will queue there.[/dim]")
 
     console.print(f"  Project folder: {project_folder}")
     console.print(f"  Script:         {jsx_path.name}")
     if flag_ok:
         console.print(f"  CLI scripting:  enabled ({flag_path.name})")
-    console.print(f"  Manual fallback: {bat_path.name} or File → Scripts → Run Script File\n")
+    console.print(f"  Manual fallback: {bat_path.name}\n")
 
+    if ame_open:
+        console.print("[dim]Media Encoder is open — proxy jobs will queue there.[/dim]")
+
+    if premiere_open:
+        return _queue_for_open_premiere(jsx_path)
+
+    console.print("\n[bold]Launching Premiere with automation...[/bold]")
     launched = _try_launch(premiere, wrapper, project_folder)
 
     if not launched:
         console.print(
-            "[yellow]Could not send script to Premiere automatically.[/yellow]\n"
+            "[yellow]Could not launch Premiere with automation.[/yellow]\n"
             f"  File → Scripts → Run Script File → {jsx_path.name}\n"
         )
         return False
-
-    if premiere_open:
-        console.print(
-            "[green]Automation script sent to Premiere.[/green] "
-            "Watch for the summary alert when import/proxies finish."
-        )
 
     if not flag_ok:
         console.print(

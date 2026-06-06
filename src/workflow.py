@@ -128,8 +128,7 @@ def run_full_workflow(
                 f"import {target}/, and queue proxies.[/dim]"
             )
         console.print(
-            "[dim]If nothing happens in Premiere: File → Scripts → Run Script File → "
-            "automate_premiere.jsx[/dim]"
+            "[dim]If Premiere was already open: File → Scripts → Run Automated Workflow[/dim]"
         )
 
     console.print("\n[bold]Proxy settings (save in project template once):[/bold]")
