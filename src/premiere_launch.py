@@ -34,6 +34,20 @@ def find_premiere_exe(cfg: dict) -> Path | None:
     return Path(sorted(matches)[-1])
 
 
+def is_media_encoder_running() -> bool:
+    try:
+        result = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq Adobe Media Encoder.exe"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        return "Adobe Media Encoder.exe" in (result.stdout or "")
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def is_premiere_running() -> bool:
     try:
         result = subprocess.run(
@@ -117,8 +131,8 @@ def install_premiere_cli_scripting(cfg: dict) -> bool:
     if ok:
         console.print(
             "\n[green]Premiere CLI scripting is enabled.[/green]\n"
-            "  Close Premiere completely, then run:\n"
-            "  python main.py workflow --number 003"
+            "  Run: python main.py workflow --number 003\n"
+            "  (Premiere may already be open — script will run in the current session.)"
         )
         return True
 
@@ -170,9 +184,6 @@ def write_launch_batch(
     jsx = str(jsx_path.resolve())
     bat.write_text(
         "@echo off\n"
-        "echo Closing Premiere if running...\n"
-        'taskkill /IM "Adobe Premiere Pro.exe" /F >nul 2>&1\n'
-        "timeout /t 2 /nobreak >nul\n"
         "echo Starting Premiere with automation...\n"
         f'start "" "{prem}" /C es.processFile "{jsx}"\n'
         "echo.\n"
@@ -206,10 +217,10 @@ def launch_premiere_automation(
     project_folder: Path,
 ) -> bool:
     """
-    Launch Premiere and run automate_premiere.jsx (creates project, imports Video).
+    Run automate_premiere.jsx via Premiere CLI (es.processFile).
 
-    Requires extendscriptprqe.txt beside Premiere.exe — run: python main.py install-premiere
-    Premiere must be fully closed first.
+    Works with Premiere already open — sends the script to the running session.
+    Media Encoder may also stay open; proxy jobs queue into the existing app.
     """
     premiere_cfg = cfg.get("premiere", {})
     if premiere_cfg.get("auto_run_script") is False:
@@ -228,13 +239,8 @@ def launch_premiere_automation(
         console.print(f"[red]Automation script missing:[/red] {jsx_path}")
         return False
 
-    if is_premiere_running():
-        console.print(
-            "[bold red]Premiere is already running.[/bold red] "
-            "Quit Premiere completely (File → Exit), then run workflow again.\n"
-            "  CLI scripts only run when Premiere starts from the command line."
-        )
-        return False
+    premiere_open = is_premiere_running()
+    ame_open = is_media_encoder_running()
 
     flag_ok, flag_path = ensure_extendscript_flag(premiere)
     if not flag_ok:
@@ -247,14 +253,36 @@ def launch_premiere_automation(
     wrapper = _write_temp_wrapper(jsx_path)
     bat_path = write_launch_batch(project_folder, premiere, jsx_path)
 
-    console.print("\n[bold]Launching Premiere with automation...[/bold]")
+    if premiere_open:
+        console.print(
+            "\n[bold]Premiere is already open[/bold] — running automation in current session..."
+        )
+    else:
+        console.print("\n[bold]Launching Premiere with automation...[/bold]")
+
+    if ame_open:
+        console.print("[dim]Media Encoder is open — proxy jobs will queue there.[/dim]")
+
     console.print(f"  Project folder: {project_folder}")
     console.print(f"  Script:         {jsx_path.name}")
     if flag_ok:
         console.print(f"  CLI scripting:  enabled ({flag_path.name})")
-    console.print(f"  Backup launcher: {bat_path.name}  (double-click if Premiere opens empty)\n")
+    console.print(f"  Manual fallback: {bat_path.name} or File → Scripts → Run Script File\n")
 
     launched = _try_launch(premiere, wrapper, project_folder)
+
+    if not launched:
+        console.print(
+            "[yellow]Could not send script to Premiere automatically.[/yellow]\n"
+            f"  File → Scripts → Run Script File → {jsx_path.name}\n"
+        )
+        return False
+
+    if premiere_open:
+        console.print(
+            "[green]Automation script sent to Premiere.[/green] "
+            "Watch for the summary alert when import/proxies finish."
+        )
 
     if not flag_ok:
         console.print(

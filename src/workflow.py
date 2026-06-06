@@ -127,7 +127,10 @@ def run_full_workflow(
                 f"\n[dim]Premiere should open project [bold]{folder_name}[/bold], "
                 f"import {target}/, and queue proxies.[/dim]"
             )
-        console.print("[dim]Close Premiere first if it was already running.[/dim]")
+        console.print(
+            "[dim]If nothing happens in Premiere: File → Scripts → Run Script File → "
+            "automate_premiere.jsx[/dim]"
+        )
 
     console.print("\n[bold]Proxy settings (save in project template once):[/bold]")
     console.print("  Quarter | ProRes QuickTime Proxy | Proxy Icon | Next to Original, Proxy folder")

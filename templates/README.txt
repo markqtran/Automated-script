@@ -43,8 +43,10 @@ PowerShell (as Administrator if normal user fails):
   python main.py install-premiere
 
 That creates extendscriptprqe.txt next to Adobe Premiere Pro.exe.
-Close Premiere completely, then:
+Close Premiere completely only if automation does not run, then:
   python main.py workflow --number 003
+
+Premiere and Media Encoder may stay open — workflow sends the script to the running app.
 
 If Premiere opens but does nothing, double-click in the project folder:
   OPEN_PREMIERE_AUTOMATION.bat
