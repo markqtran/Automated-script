@@ -9,10 +9,10 @@ from rich.console import Console
 
 from .gdrive import upload_to_drive
 from .pickup import (
-    finalize_pickup_proxies,
     load_pickup_run,
     mark_pickup_complete,
-    pickup_final_proxies_path,
+    pickup_drive_upload_subpath,
+    pickup_proxies_path,
     resolve_proxy_watch_path,
 )
 from .project_paths import find_prproj, project_root
@@ -103,10 +103,6 @@ def _post_proxy_handoff(
     upload: bool,
 ) -> dict:
     pickup = load_pickup_run(ssd_path)
-    if pickup:
-        if not dry_run:
-            finalize_pickup_proxies(cfg, folder_name, pickup)
-
     backup_stats = backup_proxies_to_hdd(cfg, folder_name, dry_run=dry_run)
 
     result: dict = {"backup": backup_stats}
@@ -119,9 +115,8 @@ def _post_proxy_handoff(
     if upload:
         upload_kwargs: dict = {}
         if pickup:
-            final = pickup_final_proxies_path(ssd_path, pickup)
-            upload_kwargs["proxies_path"] = final
-            upload_kwargs["proxies_upload_name"] = pickup.final_proxies_folder
+            upload_kwargs["proxies_path"] = pickup_proxies_path(ssd_path, pickup)
+            upload_kwargs["proxies_drive_subpath"] = pickup_drive_upload_subpath(cfg)
         result["upload"] = upload_to_drive(
             ssd_path,
             cfg,
@@ -134,7 +129,7 @@ def _post_proxy_handoff(
         mark_pickup_complete(ssd_path)
 
     ok = backup_stats.get("copied", 0) > 0 or backup_stats.get("skipped", 0) > 0
-    if pickup and pickup_final_proxies_path(ssd_path, pickup).exists():
+    if pickup and pickup_proxies_path(ssd_path, pickup).exists():
         ok = True
     result["success"] = ok
     return result
@@ -148,7 +143,7 @@ def watch_and_backup_hdd(
     stable_seconds: int = 30,
     dry_run: bool = False,
 ) -> dict:
-    """Wait for SSD proxies, finalize pick-up rename, copy to HDD."""
+    """Wait for SSD proxies, copy pick-up Proxies to HDD, optional Drive upload."""
     waited = wait_for_proxies(
         cfg, number, timeout_minutes=timeout_minutes, stable_seconds=stable_seconds
     )

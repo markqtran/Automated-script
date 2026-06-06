@@ -36,30 +36,22 @@ def _proxy_files_under(folder: Path) -> list[Path]:
     )
 
 
-def _collect_ssd_proxy_files(
-    cfg: dict,
-    folder_name: str,
-    *,
-    pickup_proxies_folder: str | None = None,
-) -> tuple[Path, list[Path]]:
+def _collect_ssd_proxy_files(cfg: dict, folder_name: str) -> tuple[Path, list[Path]]:
     """
-    Prefer Video/Proxies/ or pick-up Pickup Proxies [#N]/ on SSD.
+    Primary: Video/Proxies/
+    Pick-up: Pick Up Shots #N/Proxies/
     """
     ssd_root, _ = project_root(cfg, folder_name)
 
-    if pickup_proxies_folder:
-        final = ssd_root / pickup_proxies_folder
-        files = _proxy_files_under(final)
-        if files:
-            return final, files
-        from .pickup import load_pickup_run, pickup_working_proxies_path
+    from .pickup import load_pickup_run, pickup_proxies_path
 
-        run = load_pickup_run(ssd_root)
-        if run:
-            working = pickup_working_proxies_path(ssd_root, run)
-            files = _proxy_files_under(working)
-            if files:
-                return working, files
+    pickup = load_pickup_run(ssd_root)
+    if pickup:
+        root = pickup_proxies_path(ssd_root, pickup)
+        files = _proxy_files_under(root)
+        if files:
+            return root, files
+        return root, []
 
     canonical = proxies_path(cfg, folder_name, destination="ssd")
     discovered = proxies_dir(cfg, ssd_root)
@@ -149,29 +141,23 @@ def backup_proxies_to_hdd(
     folder_name: str,
     *,
     dry_run: bool = False,
-    pickup_proxies_folder: str | None = None,
 ) -> dict:
     """
     Copy SSD proxies and .prproj to hdd_backup.
 
     Primary run: Video/Proxies/
-    Pick-up run: Pickup Proxies/ or Pickup Proxies #N/ at project root.
+    Pick-up run: Pick Up Shots #N/Proxies/ (same relative path on HDD)
     """
     verify = cfg.get("ingest", {}).get("verify_checksum", True)
     ssd_root, hdd_root = project_root(cfg, folder_name)
 
-    from .pickup import load_pickup_run
+    from .pickup import load_pickup_run, pickup_proxies_path
 
     pickup = load_pickup_run(ssd_root)
-    if pickup and not pickup_proxies_folder:
-        pickup_proxies_folder = pickup.final_proxies_folder
+    ssd_proxy_root, sources = _collect_ssd_proxy_files(cfg, folder_name)
 
-    ssd_proxy_root, sources = _collect_ssd_proxy_files(
-        cfg, folder_name, pickup_proxies_folder=pickup_proxies_folder
-    )
-
-    if pickup_proxies_folder:
-        hdd_proxy = hdd_root / pickup_proxies_folder
+    if pickup:
+        hdd_proxy = pickup_proxies_path(hdd_root, pickup)
         hdd_proxy.mkdir(parents=True, exist_ok=True)
     else:
         hdd_proxy = _hdd_proxies_path(cfg, hdd_root)
@@ -210,7 +196,7 @@ def backup_proxies_to_hdd(
 
     # Fast path: canonical Video/Proxies layout only
     use_robocopy = (
-        not pickup_proxies_folder
+        not pickup
         and ssd_proxy_root.resolve() == proxies_path(cfg, folder_name, destination="ssd").resolve()
         and len(sources) == len(_proxy_files_under(ssd_proxy_root))
         and _robocopy_proxies(ssd_proxy_root, hdd_proxy)

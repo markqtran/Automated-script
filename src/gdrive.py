@@ -83,11 +83,13 @@ def upload_to_drive(
     *,
     proxies_path: Path | None = None,
     proxies_upload_name: str | None = None,
+    proxies_drive_subpath: str | None = None,
 ) -> dict:
     """
     Upload Proxies folder + .prproj to Google Drive (assistant editor handoff).
 
-    For pick-up runs, pass proxies_path and proxies_upload_name (e.g. Pickup Proxies).
+    Primary run: Video/Proxies/ → Drive .../Proxies/
+    Pick-up run: Pick Up Shots #N/Proxies/ → Drive .../Pickup Proxies/Proxies/
     """
     gdrive = cfg.get("google_drive", {})
     folder_id = gdrive.get("folder_id")
@@ -122,14 +124,27 @@ def upload_to_drive(
         result = subprocess.run(cmd)
         return result.returncode == 0
 
-    # Upload Proxies (Video/Proxies or pick-up Pickup Proxies [#N])
+    # Upload Proxies (primary: Proxies/ | pick-up: Pickup Proxies/Proxies/)
     proxy_path = proxies_path if proxies_path else proxies_dir(cfg, local)
-    proxy_name = proxies_upload_name or proxies_folder_name(cfg)
-    if proxy_path:
-        ok = _run_rclone(proxy_path, f"{dest}/{proxy_name}")
+    if proxies_drive_subpath:
+        proxy_target = f"{dest}/{proxies_drive_subpath}"
+    else:
+        proxy_name = proxies_upload_name or proxies_folder_name(cfg)
+        proxy_target = f"{dest}/{proxy_name}"
+    if proxy_path and proxy_path.is_dir():
+        ok = _run_rclone(proxy_path, proxy_target)
         stats["uploads" if ok else "errors"] += 1
+    elif proxies_path:
+        video = cfg.get("project", {}).get("video_folder", "Video")
+        proxy_name = proxies_folder_name(cfg)
+        console.print(
+            f"[yellow]No Proxies folder found.[/yellow]\n"
+            f"  Expected: {proxies_path}\n"
+            f"  Create proxies in Premiere first (right-click clips > Proxy > Create Proxies)."
+        )
     else:
         video = cfg.get("project", {}).get("video_folder", "Video")
+        proxy_name = proxies_folder_name(cfg)
         console.print(
             f"[yellow]No Proxies folder found.[/yellow]\n"
             f"  Expected: {local / video / proxy_name} or {local / proxy_name}\n"

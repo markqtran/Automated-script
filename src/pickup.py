@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -19,6 +18,7 @@ console = Console()
 
 PICKUP_RUN_FILE = ".pickup_run.json"
 PICKUP_SHOTS_RE = re.compile(r"^Pick Up Shots #(\d+)$", re.IGNORECASE)
+PICKUP_DRIVE_ROOT = "Pickup Proxies"
 
 
 @dataclass
@@ -28,18 +28,15 @@ class PickupRun:
     number: int
     shots_folder: str
     working_proxies_folder: str
-    final_proxies_folder: str
 
 
 def pickup_shots_folder_name(n: int) -> str:
     return f"Pick Up Shots #{n}"
 
 
-def pickup_proxies_folder_name(n: int) -> str:
-    """First pick-up uses 'Pickup Proxies'; later runs add #N."""
-    if n <= 1:
-        return "Pickup Proxies"
-    return f"Pickup Proxies #{n}"
+def pickup_drive_upload_subpath(cfg: dict) -> str:
+    """Google Drive path under script folder: Pickup Proxies/Proxies/"""
+    return f"{PICKUP_DRIVE_ROOT}/{proxy_subfolder_name(cfg)}"
 
 
 def _folder_has_footage(path: Path, extensions: list[str]) -> bool:
@@ -111,6 +108,8 @@ def prompt_pickup_run(cfg: dict, folder_name: str) -> bool:
     extensions = cfg.get("footage_extensions", [".mp4", ".mov", ".xml"])
     video = video_folder_name(cfg)
     n = next_pickup_number(ssd_path)
+    shots = pickup_shots_folder_name(n)
+    proxy_sub = proxy_subfolder_name(cfg)
 
     console.print("\n[bold yellow]Existing project detected[/bold yellow]")
     console.print(f"  Script folder: {folder_name}\n")
@@ -121,12 +120,14 @@ def prompt_pickup_run(cfg: dict, folder_name: str) -> bool:
         _summarize_folder(ssd_path / name, f"SSD {name}", extensions)
 
     console.print(
-        f"\nA new run will create [bold]{pickup_shots_folder_name(n)}[/bold] "
+        f"\nA new run will create [bold]{shots}/[/bold] "
         f"(original Video/ is left unchanged)."
     )
     console.print(
-        f"After proxies finish, [bold]{pickup_proxies_folder_name(n)}[/bold] "
-        "is uploaded to HDD and Google Drive.\n"
+        f"Proxies stay at [bold]{shots}/{proxy_sub}/[/bold] on SSD + HDD backup."
+    )
+    console.print(
+        f"Google Drive: [bold]{pickup_drive_upload_subpath(cfg)}/[/bold]\n"
     )
     return confirm("Start pick-up shots run?", default=True)
 
@@ -138,13 +139,11 @@ def prepare_pickup_run(cfg: dict, folder_name: str) -> PickupRun:
     shots = pickup_shots_folder_name(n)
     proxy_sub = proxy_subfolder_name(cfg)
     working_proxies = f"{shots}/{proxy_sub}"
-    final_proxies = pickup_proxies_folder_name(n)
 
     run = PickupRun(
         number=n,
         shots_folder=shots,
         working_proxies_folder=working_proxies,
-        final_proxies_folder=final_proxies,
     )
 
     for root in (ssd_path, hdd_path):
@@ -154,9 +153,9 @@ def prepare_pickup_run(cfg: dict, folder_name: str) -> PickupRun:
     save_pickup_run(ssd_path, run)
     console.print(f"\n[green]Pick-up run #{n} ready.[/green]")
     console.print(f"  Footage → {shots}/")
-    console.print(f"  Proxies (during encode) → {working_proxies}/")
-    console.print(f"  After encode → {final_proxies}/")
-    console.print(f"  Premiere:    re-opens same {folder_name}.prproj (does not create a new project)")
+    console.print(f"  Proxies → {working_proxies}/  (SSD + HDD backup)")
+    console.print(f"  Drive   → {pickup_drive_upload_subpath(cfg)}/")
+    console.print(f"  Premiere: re-opens same {folder_name}.prproj")
     return run
 
 
@@ -180,7 +179,6 @@ def load_pickup_run(project_path: Path) -> PickupRun | None:
         number=int(data["number"]),
         shots_folder=data["shots_folder"],
         working_proxies_folder=data["working_proxies_folder"],
-        final_proxies_folder=data["final_proxies_folder"],
     )
 
 
@@ -196,45 +194,17 @@ def mark_pickup_complete(project_path: Path) -> None:
         path.unlink(missing_ok=True)
 
 
-def pickup_working_proxies_path(project_path: Path, run: PickupRun) -> Path:
+def pickup_proxies_path(project_path: Path, run: PickupRun) -> Path:
+    """SSD/HDD path: Pick Up Shots #N/Proxies/"""
     return project_path / Path(run.working_proxies_folder)
 
 
-def pickup_final_proxies_path(project_path: Path, run: PickupRun) -> Path:
-    return project_path / run.final_proxies_folder
-
-
-def finalize_pickup_proxies(cfg: dict, folder_name: str, run: PickupRun) -> Path | None:
-    """
-    Move pick-up Proxies folder to project-root Pickup Proxies [#N] on SSD.
-    """
-    ssd_path, hdd_path = project_root(cfg, folder_name)
-    proxy_sub = proxy_subfolder_name(cfg)
-    working = ssd_path / run.shots_folder / proxy_sub
-    final = ssd_path / run.final_proxies_folder
-
-    if not working.is_dir() or not any(f.is_file() for f in working.rglob("*")):
-        console.print(f"[yellow]No proxy files to finalize at {working}[/yellow]")
-        return None
-
-    if final.exists():
-        if any(final.rglob("*")):
-            console.print(f"[yellow]Replacing existing {final.name}/ on SSD[/yellow]")
-        shutil.rmtree(final)
-
-    shutil.move(str(working), str(final))
-    console.print(f"\n[green]Renamed pick-up proxies:[/green] {final}")
-
-    (hdd_path / run.final_proxies_folder).mkdir(parents=True, exist_ok=True)
-    return final
-
-
 def resolve_proxy_watch_path(cfg: dict, folder_name: str) -> Path:
-    """Path to poll during encode — pick-up working Proxies or primary Video/Proxies."""
+    """Path to poll during encode — pick-up Proxies or primary Video/Proxies."""
     ssd_path, _ = project_root(cfg, folder_name)
     run = load_pickup_run(ssd_path)
     if run:
-        return pickup_working_proxies_path(ssd_path, run)
+        return pickup_proxies_path(ssd_path, run)
     from .project_paths import proxies_path
 
     return proxies_path(cfg, folder_name, destination="ssd")
